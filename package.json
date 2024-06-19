@@ -1,0 +1,17 @@
+{
+  "name": "elrsbuddy",
+  "version": "1.0.0",
+  "description": "",
+  "main": "wasmoon-web.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "wasmoon": "^1.16.0"
+  },
+  "devDependencies": {
+    "webpack-cli": "^5.1.4"
+  }
+}

@@ -1,0 +1,621 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<title>ELRS Buddy</title>
+<script src="wasmoon-web.js" type="text/javascript" async></script>
+<script src="elrsV3.lua" type="application/lua" async></script>
+<style>
+button {
+	width: 100%;
+	height: 100%;
+	font-size: large;
+}
+</style>
+</head>
+<body style="font-family:Roboto,-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;">
+<div style="display:flex; flex-direction:column; position:absolute; top:0; bottom:0; left:0; right:0; background-color:#5f8bf3;">
+	<div style="display:flex;">
+		<div style="width:640px;">
+			<div style="display:flex;">
+				<button id="pair">pair device</button>
+				<button id="connect" disabled="disabled">connect</button>
+				<button id="start" disabled="disabled">(re)start</button>
+			</div>
+			<div id="crsfstatus" style="text-align: center;"></div>
+			<canvas id="lcd" width="480" height="272" style="display:block; margin-left:auto; margin-right:auto;"></canvas>
+		</div>
+		<div style="color:white; font-size:1.5em; font-weight:bold; margin:auto; display:flex">
+			<div><img src="logotype.svg" style="padding:0.3em;"></div>
+			<div style="margin:auto;"><div>ELRS Buddy</div><div style="font-size:0.5em; font-weight:normal; text-align:right;">v1.0.0</div></div>
+		</div>
+	</div>
+	<div style="border:1px solid black; height:100%; overflow:auto; display:flex; flex-direction:column-reverse; margin-top:auto; background:linear-gradient(to bottom,#5f8bf3,#9ec670);">
+		<pre id="log"></pre>
+	</div>
+</div>
+</body>
+<script type="application/lua" id="edgetx">
+	lcd = {
+		clear = function (color)
+			print("LCD:CLEAR")
+		end;
+		drawLine = function (x1, y1, x2, y2, pattern, flags)
+			print("LCD:DRAWLINE")
+		end;
+		drawGauge = function (x, y, w, h, fill, maxfill, flags)
+			if maxfill ~= nil and maxfill ~= 0 and fill ~= nil then
+				print(string.format("GAUGE %.2f %%", (fill/maxfill)*100.0))
+			end
+		end;
+		drawRectangle = function (x, y, w, h, flags, t)
+			print("LCD:DRAWRECT")
+		end;
+		drawFilledRectangle = function (x, y, w, h, flags)
+			print("LCD:DRAWFRECT")
+		end;
+		drawText = function (x, y, text, flags, inversColor)
+			print("LCD: " .. text)
+		end;
+		setColor = function (colorIndex, color)
+			print("LCD:SETCOLOR")
+		end;
+		getLastPos = function ()
+			return 1
+		end
+	}
+
+	bit32 = {
+		band = function (a,b)
+			return(a&b)
+		end;
+		bor = function (a,b)
+			return(a|b)
+		end;
+		lshift = function (a,b)
+			return(a<<b)
+		end;
+		rshift = function (a,b)
+			return(a>>b)
+		end;
+		btest = function (a,b)
+			return(a&b~=0)
+		end;
+	}
+
+	CRSF_IN = {}
+	CRSF_OUT = {}
+	ELRS_LOAD = {}
+
+	function getVersion ()
+		return "2.9.4", "pclua4elrs", 2, 9, 4, "EdgeTX"
+	end
+
+	function popupConfirmation (t, m, e)
+		print(string.format("[%q] %s: %s", t, m, e))
+		return "CANCEL"
+	end
+
+	function crossfireTelemetryPush (cmd, data)
+		if cmd == nil or data == nil then
+			-- frame being collected for CRSF transmission
+			success, cmd, data = pcall(function () return table.unpack(table.remove(CRSF_OUT)) end)
+			if success == false then
+				return nil
+			end
+			return cmd, data
+		else
+			-- frame being pushed for later transmission
+			table.insert(CRSF_OUT, 1, {cmd, data})
+			return true
+		end
+	end
+
+	function crossfireTelemetryPop (cmd, data)
+		if cmd ~= nil and data ~= nil then
+			-- frame arrived from the CRSF link
+			table.insert(CRSF_IN, 1, {cmd, data})
+			return true
+		else
+			-- frame being collected for processing
+			success, cmd, data = pcall(function () return table.unpack(table.remove(CRSF_IN)) end)
+			if success == false then
+				return nil
+			end
+			return cmd, data
+		end
+	end
+	
+	function crossfireTelemetryFlush ()
+		CRSF_IN = {}
+		CRSF_OUT = {}
+	end
+	
+	function multiret (fname, ...)
+		local f = _G[fname]
+		if f == nil then return nil end
+		return table.pack(f(...))
+	end
+	
+	function loadelrs ()
+		ELRS_LOAD = loadfile('elrsV3.lua')
+		return ELRS_LOAD
+	end
+	
+	LCD_W = 480
+	LCD_H = 272
+	CHAR_UP = '+'
+	CHAR_DOWN = '-'
+	EVT_VIRTUAL_ENTER = 1
+	EVT_VIRTUAL_EXIT = 2
+	EVT_VIRTUAL_NEXT = 4
+	EVT_VIRTUAL_PREV = 8
+	CENTER = 16
+	RIGHT = 32
+	BOLD = 64
+	SOLID = 128
+	INVERS = 256
+	BLINK = 512
+	CUSTOM_COLOR = 1024
+	BLACK = 2048
+	WHITE = 4096
+	GREY_DEFAULT = 8192
+</script>
+<script>
+lcd = {
+	'strokeStyle': function (flags) {
+		if ((flags & lcd.INVERS) == lcd.INVERS) {
+			lcd.ctx.strokeStyle = '#ffffff';
+		} else if ((flags & lcd.CUSTOM_COLOR) == lcd.CUSTOM_COLOR) {
+			lcd.ctx.strokeStyle = lcd.COLOR_CUSTOM;
+		} else {
+			lcd.ctx.strokeStyle = '#000000';
+		}
+		if (lcd.debug) console.log(`strokeStyle ${lcd.ctx.strokeStyle}`);
+	},
+	'fillStyle': function (flags) {
+		if ((flags & lcd.INVERS) == lcd.INVERS) {
+			lcd.ctx.fillStyle = '#ffffff';
+		} else if ((flags & lcd.CUSTOM_COLOR) == lcd.CUSTOM_COLOR) {
+			lcd.ctx.fillStyle = lcd.COLOR_CUSTOM;
+		} else {
+			lcd.ctx.fillStyle = '#000000';
+		}
+		if (lcd.debug) console.log(`fillStyle ${lcd.ctx.fillStyle}`);
+	},
+	'textConfig': function (flags) {
+		var fontflags = []
+		if ((flags & lcd.RIGHT) == lcd.RIGHT) {
+			lcd.ctx.textAlign = 'right';
+		} else {
+			lcd.ctx.textAlign = 'left';
+		}
+		if ((flags & lcd.BLINK) == lcd.BLINK) {
+			fontflags.push('italic');
+		}
+		if ((flags & lcd.BOLD) == lcd.BOLD) {
+			fontflags.push('bold');
+		}
+		fontflags.push(lcd.font);
+		lcd.ctx.font = fontflags.join(' ');
+		if (lcd.debug) console.log(`textAlign ${lcd.ctx.textAlign} font ${lcd.ctx.font}`);
+	},
+	'clear': function (color) {
+		if (lcd.debug) console.log('clear');
+		lcd.ctx.reset();
+		lcd.lastpos = 0;
+		lcd.ctx.font = lcd.font;
+		lcd.ctx.textBaseline = 'top';
+		lcd.ctx.lineWidth = 2;
+	},
+	'drawLine': function (x1, y1, x2, y2, pattern, flags) {
+		if (lcd.debug) console.log(`drawLine ${flags}`);
+		lcd.ctx.beginPath();
+		lcd.ctx.moveTo(x1, y1);
+		lcd.ctx.lineTo(x2, y2);
+		lcd.ctx.closePath();
+		lcd.strokeStyle(flags);
+		lcd.ctx.stroke();
+		lcd.lastpos = x2;
+	},
+	'drawGauge': function (x, y, w, h, fill, maxfill, flags) {
+		const fillwidth = Math.floor((fill/maxfill)*w);
+		lcd.ctx.clearRect(x, y, w, h);
+		lcd.fillStyle(flags);
+		lcd.ctx.fillRect(x, y, fillwidth, h);
+		lcd.lastpos = x + w;
+	},
+	'drawRectangle': function (x, y, w, h, flags, t) {
+		lcd.strokeStyle(flags);
+		lcd.ctx.strokeRect(x, y, w, h);
+		lcd.lastpos = x + w;
+		if (lcd.debug) console.log(`drawRectangle ${flags}`);
+	},
+	'drawFilledRectangle': function (x, y, w, h, flags) {
+		lcd.fillStyle(flags);
+		lcd.ctx.fillRect(x, y, w, h);
+		lcd.lastpos = x + w;
+		if (lcd.debug) console.log(`drawFilledRectangle ${flags}`);
+	},
+	'drawText': function (x, y, text, flags, inversColor) {
+		if (lcd.debug) console.log(`drawText ${flags} ${text}`);
+		lcd.textConfig(flags);
+		const tmetrics = lcd.ctx.measureText(text);
+		const boundw = Math.round(tmetrics.actualBoundingBoxLeft + tmetrics.actualBoundingBoxRight);
+		const boundh = Math.round(tmetrics.actualBoundingBoxAscent + tmetrics.actualBoundingBoxDescent);
+		if ((flags & lcd.INVERS) == lcd.INVERS) {
+			lcd.fillStyle(0);
+			lcd.ctx.fillRect(x-1, y, boundw+4, 22);
+		}
+		lcd.fillStyle(flags);
+		lcd.ctx.fillText(text, x, y);
+		lcd.lastpos = x + boundw;
+	},
+	'RGB': function (r, g, b) {
+		if (r === undefined) return;
+		if (g === undefined) return;
+		return `rgb(${r},${g},${b})`;
+	},
+	'setColor': function (colorIndex, color) {
+		if (colorIndex != lcd.CUSTOM_COLOR) return;
+		switch (color) {
+		case lcd.BLACK:
+			color = 'black';
+			break;
+		case lcd.WHITE:
+			color = 'white';
+			break;
+		}
+		lcd.COLOR_CUSTOM = color;
+		if (lcd.debug) console.log(`COLOR_CUSTOM: ${color}`);
+	},
+	'sizeText': function (text, flags) {
+		lcd.textConfig(flags);
+		const tmetrics = lcd.ctx.measureText(text);
+		const boundw = Math.round(tmetrics.actualBoundingBoxLeft + tmetrics.actualBoundingBoxRight);
+		return boundw;
+	},
+	'getLastPos': function () {
+		return lcd.lastpos;
+	},
+	'lastpos': 0,
+	'ctx': null,
+	'font': '22px "Noto Sans", Roboto, sans-serif',
+	'COLOR_CUSTOM': '#000000',
+	'debug': false
+}
+
+function get_uptime () {
+	return Math.round(window.performance.now() / 10);
+}
+
+function try_tag (tag) {
+	const contentTypeRegexp = /^(.*?\/.*?)([\t ]*;.*)?$/;
+	if (tag.tagName !== "SCRIPT")
+		return;
+	let contentTypeMatch = contentTypeRegexp.exec(tag.type);
+	if (!contentTypeMatch)
+		return;
+	let mimetype = contentTypeMatch[1];
+	if (mimetype !== "application/lua" && mimetype !== "text/lua")
+		return;
+	if (tag.src)
+		return;
+	window.lua.doStringSync(tag.innerHTML);
+};
+
+function llog (msg) {
+	console.log(msg);
+}
+
+function portstr (info) {
+	let str = '';
+	if (info.usbVendorId) {
+		str += info.usbVendorId;
+	} else {
+		str += '0';
+	}
+	str += ':';
+	if (info.usbProductId) {
+		str += info.usbProductId;
+	} else {
+		str += '0';
+	}
+	return str;
+}
+
+function loadpairedports (verbose=true) {
+	navigator.serial.getPorts().then((ports) => {
+		let info;
+		let npairedport = null;
+		for (port of ports) {
+			info = port.getInfo();
+			if (pairedport != null && pairedport.port == port) return;
+			const str = portstr(info);
+			npairedport = {
+				port: port,
+				info: str
+			};
+			if (verbose) llog(`device ${str} found`);
+			break;
+		}
+		pairedport = npairedport;
+		if (pairedport != null) {
+			pairbutton.innerHTML = 'unpair ' + pairedport.info;
+			connbutton.disabled = false;
+			connbutton.innerHTML = 'connect';
+		} else {
+			pairbutton.innerHTML = 'pair device';
+			connbutton.disabled = true;
+			connbutton.innerHTML = 'connect';
+		}
+	});
+}
+
+function edgetx_popupConfirmation (title, message, event) {
+	const ret = popup_status.return;
+	popup_status.title = title;
+	popup_status.message = message;
+	popup_status.visible = true;
+	if (ret != null) {
+		popup_status.return = null;
+		return ret;
+	}
+}
+
+function updatestatus (clear=false) {
+	var sstr = '';
+	if (statusinterval == null) {
+		if (clear) return;
+		statusinterval = setInterval(updatestatus, 5000);
+	} else if (clear) {
+		clearInterval(statusinterval);
+		statusinterval = null;
+		crsfstatus.hz = 5;
+	}
+	if (connbutton.innerHTML != 'connect') {
+		if (crsfstatus.shifts.length > 0) {
+			const sum = crsfstatus.shifts.reduce((partialSum, a) => partialSum + a, 0);
+			const avg = (sum / crsfstatus.shifts.length).toFixed(1);
+			const smin = Math.min(...crsfstatus.shifts);
+			const smax = Math.max(...crsfstatus.shifts);
+			const rate = (crsfstatus.shifts.length / 5.0).toFixed(1);
+			sstr = `hz:${crsfstatus.hz} shift:[${avg} ${smin} ${smax} ${rate}/s]`;
+			crsfstatus.shifts = [];
+		} else {
+			sstr = `hz:${crsfstatus.hz}`;
+		}
+	}
+	statusspan.innerHTML = sstr;
+}
+
+function elrsrun (key = 0) {
+	popup_status.visible = false;
+	if (elrs.run(key) != 0) {
+		llog('ELRS Lua exited!');
+		crossfireFlush();
+		elrsrefresh(true);
+		elrs = null;
+		return;
+	}
+	ret = multiret('crossfireTelemetryPush');
+	if (ret[1] !== undefined) {
+		comworker.postMessage(['crsfsend', ret[1], ret[2]]);
+	}
+	if (popup_status.visible) {
+		llog(`popup ${popup_status.title}: ${popup_status.message}`);
+	}
+}
+
+function elrsrefresh (clear=false) {
+	if (elrsinterval == null) {
+		if (clear) return;
+		elrsinterval = setInterval(elrsrefresh, 100);
+	} else if (clear) {
+		clearInterval(elrsinterval);
+		elrsinterval = null;
+		return;
+	}
+	elrsrun();
+}
+
+async function boot () {
+	const lua = await wasmoon.factory.createEngine();
+	window.lua = lua;
+	lua.global.set('getTime', get_uptime);
+	const selector = 'script[type^="application/lua"], script[type^="text/lua"]';
+	Array.prototype.forEach.call(document.querySelectorAll(selector), try_tag);
+	if (elrs_load === true) {
+		console.debug('elrs_load=1 boot');
+		elrs_load = await window.lua.doString('return loadelrs()');
+	} else {
+		elrs_load = true;
+	}
+	crossfirePop = lua.global.get('crossfireTelemetryPop');
+	crossfireFlush = lua.global.get('crossfireTelemetryFlush');
+	multiret = lua.global.get('multiret');
+	const logelem = document.getElementById("log");
+	if (logelem) {
+		llog = function (msg) {
+			const tm = get_uptime();
+			logelem.append(`${tm} ${msg}\n`);
+		}
+	}
+	loadpairedports();
+	lcd.ctx = document.getElementById('lcd').getContext('2d');
+	lcd.clear();
+	lcd.INVERS = lua.global.get('INVERS');
+	lcd.RIGHT = lua.global.get('RIGHT');
+	lcd.CENTER = lua.global.get('CENTER');
+	lcd.BOLD = lua.global.get('BOLD');
+	lcd.BLINK = lua.global.get('BLINK');
+	lcd.SOLID = lua.global.get('SOLID');
+	lcd.BLACK = lua.global.get('BLACK');
+	lcd.WHITE = lua.global.get('WHITE');
+	lcd.CUSTOM_COLOR = lua.global.get('CUSTOM_COLOR');
+	lua.global.set('lcd', lcd);
+	lua.global.set('popupConfirmation', edgetx_popupConfirmation);
+	let key = lua.global.get('EVT_VIRTUAL_ENTER');
+	keymap[13] = key; // Enter
+	keymap[39] = key; // Right
+	keymap[76] = key; // l
+	key = lua.global.get('EVT_VIRTUAL_EXIT');
+	keymap[8] = key; // Backspace
+	keymap[27] = key; // Escape
+	keymap[37] = key; // Left
+	keymap[72] = key; // h
+	key = lua.global.get('EVT_VIRTUAL_PREV');
+	keymap[38] = key; // Up
+	keymap[74] = key; // j
+	key = lua.global.get('EVT_VIRTUAL_NEXT');
+	keymap[40] = key; // Down
+	keymap[75] = key; // k
+}
+elrs_load = null;
+elrs = null;
+crossfirePop = null;
+crossfireFlush = null;
+multiret = null;
+pairedport = null;
+statusinterval = null;
+elrsinterval = null;
+comworker = new Worker('worker.js');
+connbutton = document.getElementById('connect');
+pairbutton = document.getElementById('pair');
+startbutton = document.getElementById('start');
+statusspan = document.getElementById('crsfstatus');
+crsfstatus = {
+	'hz': 0,
+	'shifts': []
+};
+popup_status = {
+	'title': null,
+	'message': null,
+	'return': null,
+	'visible': false
+};
+keymap = {}
+workermsg = {
+	'started': function (data) {
+		llog("serial worker started");
+		connbutton.innerHTML = 'disconnect';
+	},
+	'stopped': function (data) {
+		llog("serial worker stopped");
+		connbutton.innerHTML = 'connect';
+		startbutton.disabled = true;
+		crossfireFlush();
+		updatestatus(true);
+		elrsrefresh(true);
+		elrs = null;
+	},
+	'writeburn': function (data) {
+		comworker.postMessage(data);
+	},
+	'log': function (data) {
+		llog(data[1]);
+	},
+	'sync': function (data) {
+		var quickupd = false;
+		if (data[1] != crsfstatus.hz) {
+			crsfstatus.hz = data[1];
+			quickupd = true;
+		}
+		crsfstatus.shifts.push(data[2]);
+		if (quickupd) updatestatus();
+	},
+	'start': function (data) {
+		llog('starting ELRS');
+		elrs = elrs_load();
+		elrs.init();
+		elrsrefresh();
+		startbutton.disabled = false;
+	},
+	'crsfrecv': function (data) {
+		var cmd = data[1];
+		var d = data[2];
+		crossfirePop(cmd, d);
+	}
+};
+
+window.addEventListener("load", boot);
+comworker.addEventListener("message", (e) => { return workermsg[e.data[0]](e.data); });
+document.addEventListener('keydown', (ev) => {
+	let key = keymap[ev.which];
+	if (key === undefined) return true;
+	ev.preventDefault();
+	if (elrs == null) return false;
+	if (ev.which == 13) { // ENTER
+		popup_status.return = "OK";
+	} else if (ev.which == 27) { // ESCAPE
+		popup_status.return = "CANCEL";
+	}
+	elrsrun(key);
+	return false;
+});
+document.querySelector('script[src="elrsV3.lua"]').addEventListener(
+	'load',
+	(ev) => {
+		if (elrs_load === true) {
+			console.debug('elrs_load=1 notboot');
+			elrs_load = window.lua.doStringSync('return loadelrs()');
+		} else {
+			elrs_load = true;
+		}
+	}
+);
+
+navigator.serial.addEventListener("connect", (e) => {
+	const info = e.target.getInfo();
+	const str = portstr(info);
+	llog(`device ${str} attached`);
+	loadpairedports(false);
+});
+navigator.serial.addEventListener("disconnect", (e) => {
+	const info = e.target.getInfo();
+	const str = portstr(info);
+	llog(`device ${str} detached`);
+	loadpairedports(false);
+});
+
+pairbutton.addEventListener("click", () => {
+	if (pairedport != null) {
+		pairedport.port.forget().then(() => {
+			llog(`device ${pairedport.info} unpaired`);
+			loadpairedports();
+		});
+	} else {
+		navigator.serial.requestPort().then((port) => {
+			const info = port.getInfo();
+			const str = portstr(info);
+			llog(`device ${str} paired`);
+			loadpairedports(false);
+		}).catch((e) => {
+			if (e.name == 'NotFoundError') return;
+			throw(e);
+		});
+	}
+});
+
+connbutton.addEventListener("click", () => {
+	if (pairedport == null) return;
+	if (connbutton.innerHTML == 'connect') {
+		comworker.postMessage(["start"]);
+		connbutton.innerHTML = 'connecting...';
+	} else {
+		comworker.postMessage(["stop"]);
+	}
+});
+
+startbutton.addEventListener('click', () => {
+	llog('(re)starting ELRS');
+	if (elrs != null) {
+		crossfireFlush();
+		elrsrefresh(true);
+		elrs = null;
+	}
+	elrs = elrs_load();
+	elrs.init();
+	elrsrefresh();
+});
+</script>
+</html>
