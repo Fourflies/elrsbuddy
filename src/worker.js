@@ -480,7 +480,7 @@ uimessage = {
 				return;
 			}
 			port = ports[0];
-			port.open({baudRate: 4000000}).then(() => {
+			port.open({baudRate: 921600}).then(() => {
 				log('connected to port');
 				writer = port.writable.getWriter();
 				write = write_run;
