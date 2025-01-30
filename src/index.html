@@ -36,6 +36,13 @@ button {
 </div>
 </body>
 <script type="application/lua" id="edgetx">
+	model = {
+		getModule = function (modIdx)
+			local module = {}
+			module.Type = 5
+			return module
+		end;
+	}
 	lcd = {
 		clear = function (color)
 			print("LCD:CLEAR")
