@@ -1,5 +1,6 @@
 const path = require('path')
-
+const CopyWebpackPlugin = require('copy-webpack-plugin');
+ 
 module.exports = {
 	mode: 'production',
 	resolve: {
@@ -22,5 +23,15 @@ module.exports = {
 			name: 'wasmoon',
 			type: 'var'
 		}
-	}
+	},
+	plugins: [
+		new CopyWebpackPlugin({
+            patterns: [
+				{ from: 'img/*' },
+                'src/elrsV3.lua',
+                'src/worker.js',
+				'src/index.html'
+            ]
+        })
+	]
 }
