@@ -26,12 +26,12 @@ module.exports = {
 	},
 	plugins: [
 		new CopyWebpackPlugin({
-            patterns: [
-				{ from: 'img/*' },
-                'src/elrsV3.lua',
-                'src/worker.js',
+			patterns: [
+				{ from: 'img/*', to: '[name][ext]' },
+				'src/elrsV3.lua',
+				'src/worker.js',
 				'src/index.html'
-            ]
-        })
+			]
+		})
 	]
 }
