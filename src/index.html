@@ -11,6 +11,9 @@ button {
 	height: 100%;
 	font-size: large;
 }
+a {
+	color: white;
+}
 </style>
 </head>
 <body style="font-family:Roboto,-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;">
@@ -19,15 +22,26 @@ button {
 		<div style="width:640px;">
 			<div style="display:flex;">
 				<button id="pair">pair device</button>
+				<select id="baud" size="1" disabled="disabled">
+					<option value="921600" selected="selected">921600 bps</option>
+					<option value="460800">460800 bps</option>
+					<option value="230400">230400 bps</option>
+					<option value="115200">115200 bps</option>
+				</select>
 				<button id="connect" disabled="disabled">connect</button>
 				<button id="start" disabled="disabled">(re)start</button>
 			</div>
 			<div id="crsfstatus" style="text-align: center;"></div>
 			<canvas id="lcd" width="480" height="272" style="display:block; margin-left:auto; margin-right:auto;"></canvas>
 		</div>
-		<div style="color:white; font-size:1.5em; font-weight:bold; margin:auto; display:flex">
-			<div><img src="logotype.svg" style="padding:0.3em;"></div>
-			<div style="margin:auto;"><div>ELRS Buddy</div><div style="font-size:0.5em; font-weight:normal; text-align:right;">v1.0.3</div></div>
+		<div style="margin: auto;">
+			<div style="color:white; font-size:1.5em; font-weight:bold; margin:auto; display:flex">
+				<div><img src="logotype.svg" style="padding:0.3em;"></div>
+				<div style="margin:auto;"><div>ELRS Buddy</div><div style="font-size:0.5em; font-weight:normal; text-align:right;">v1.0.4</div></div>
+			</div>
+			<div style="text-align: center;">
+				<a target="_blank" href="https://youtube.com/playlist?list=PL5blJzbVpLjFwGb_-_IBfnscjPwTEA98u">Introduction / Howto</a>
+			</div>
 		</div>
 	</div>
 	<div style="border:1px solid black; height:100%; overflow:auto; display:flex; flex-direction:column-reverse; margin-top:auto; background:linear-gradient(to bottom,#5f8bf3,#9ec670);">
@@ -349,10 +363,12 @@ function loadpairedports (verbose=true) {
 		pairedport = npairedport;
 		if (pairedport != null) {
 			pairbutton.innerHTML = 'unpair ' + pairedport.info;
+			baudselect.disabled = false;
 			connbutton.disabled = false;
 			connbutton.innerHTML = 'connect';
 		} else {
 			pairbutton.innerHTML = 'pair device';
+			baudselect.disabled = true;
 			connbutton.disabled = true;
 			connbutton.innerHTML = 'connect';
 		}
@@ -368,32 +384,6 @@ function edgetx_popupConfirmation (title, message, event) {
 		popup_status.return = null;
 		return ret;
 	}
-}
-
-function updatestatus (clear=false) {
-	var sstr = '';
-	if (statusinterval == null) {
-		if (clear) return;
-		statusinterval = setInterval(updatestatus, 5000);
-	} else if (clear) {
-		clearInterval(statusinterval);
-		statusinterval = null;
-		crsfstatus.hz = 5;
-	}
-	if (connbutton.innerHTML != 'connect') {
-		if (crsfstatus.shifts.length > 0) {
-			const sum = crsfstatus.shifts.reduce((partialSum, a) => partialSum + a, 0);
-			const avg = (sum / crsfstatus.shifts.length).toFixed(1);
-			const smin = Math.min(...crsfstatus.shifts);
-			const smax = Math.max(...crsfstatus.shifts);
-			const rate = (crsfstatus.shifts.length / 5.0).toFixed(1);
-			sstr = `hz:${crsfstatus.hz} shift:[${avg} ${smin} ${smax} ${rate}/s]`;
-			crsfstatus.shifts = [];
-		} else {
-			sstr = `hz:${crsfstatus.hz}`;
-		}
-	}
-	statusspan.innerHTML = sstr;
 }
 
 function elrsrun (key = 0) {
@@ -478,6 +468,7 @@ async function boot () {
 	keymap[40] = key; // Down
 	keymap[75] = key; // k
 }
+
 elrs_load = null;
 elrs = null;
 crossfirePop = null;
@@ -487,14 +478,11 @@ pairedport = null;
 statusinterval = null;
 elrsinterval = null;
 comworker = new Worker('worker.js');
+baudselect = document.getElementById('baud');
 connbutton = document.getElementById('connect');
 pairbutton = document.getElementById('pair');
 startbutton = document.getElementById('start');
 statusspan = document.getElementById('crsfstatus');
-crsfstatus = {
-	'hz': 0,
-	'shifts': []
-};
 popup_status = {
 	'title': null,
 	'message': null,
@@ -502,17 +490,84 @@ popup_status = {
 	'visible': false
 };
 keymap = {}
-workermsg = {
+
+const crsfstatus = {
+	hz: 0,
+	shifts: [],
+	reset: function () {
+		this.hz = 0;
+		this.shifts = [];
+	}
+}
+
+const status = {
+	interval: null,
+	_update: null,
+	bootiters: 0,
+	update: function () {
+		return this._update();
+	},
+	update_main: function () {
+		var sstr = '';
+		if (connbutton.innerHTML != 'connect') {
+			if (crsfstatus.shifts.length > 0) {
+				const sum = crsfstatus.shifts.reduce((partialSum, a) => partialSum + a, 0);
+				const avg = (sum / crsfstatus.shifts.length).toFixed(1);
+				const smin = Math.min(...crsfstatus.shifts);
+				const smax = Math.max(...crsfstatus.shifts);
+				sstr = `hz:${crsfstatus.hz} shift:[${avg} ${smin} ${smax}]`;
+				crsfstatus.shifts = [];
+			} else {
+				sstr = `hz:${crsfstatus.hz}`;
+			}
+		}
+		statusspan.innerHTML = sstr;
+	},
+	update_boot: function () {
+		if (crsfstatus.shifts.length > 0) {
+			this._update = this.update_main;
+		} else {
+			this.bootiters++;
+			if (this.bootiters > 3) {
+				llog('Unresponsive CRSF, disconnecting...');
+				comworker.postMessage(["stop"]);
+			} else if (this.bootiters > 1) {
+				llog('No CRSF response in >5 seconds');
+			}
+		}
+		return this.update_main();
+	},
+	reset: function () {
+		if (this.interval != null) {
+			clearInterval(this.interval);
+			this.interval = null;
+		}
+		crsfstatus.reset();
+		this._update = this.update_boot;
+		this.bootiters = 0;
+	},
+	start: function () {
+		if (this.interval == null) {
+			this.interval = setInterval(this.update.bind(this), 5000);
+		}
+	}
+}
+status.reset();
+
+const workermsg = {
 	'started': function (data) {
 		llog("serial worker started");
 		connbutton.innerHTML = 'disconnect';
+		baudselect.disabled = true;
+		status.start();
 	},
 	'stopped': function (data) {
 		llog("serial worker stopped");
 		connbutton.innerHTML = 'connect';
 		startbutton.disabled = true;
+		baudselect.disabled = false;
 		crossfireFlush();
-		updatestatus(true);
+		status.reset();
 		elrsrefresh(true);
 		elrs = null;
 	},
@@ -528,8 +583,8 @@ workermsg = {
 			crsfstatus.hz = data[1];
 			quickupd = true;
 		}
-		crsfstatus.shifts.push(data[2]);
-		if (quickupd) updatestatus();
+		if (data.length > 2) crsfstatus.shifts.push(data[2]);
+		if (quickupd) status.update();
 	},
 	'start': function (data) {
 		llog('starting ELRS');
@@ -575,13 +630,13 @@ document.querySelector('script[src="elrsV3.lua"]').addEventListener(
 navigator.serial.addEventListener("connect", (e) => {
 	const info = e.target.getInfo();
 	const str = portstr(info);
-	llog(`device ${str} attached`);
+	llog(`paired device ${str} attached`);
 	loadpairedports(false);
 });
 navigator.serial.addEventListener("disconnect", (e) => {
 	const info = e.target.getInfo();
 	const str = portstr(info);
-	llog(`device ${str} detached`);
+	llog(`paired device ${str} detached`);
 	loadpairedports(false);
 });
 
@@ -607,7 +662,7 @@ pairbutton.addEventListener("click", () => {
 connbutton.addEventListener("click", () => {
 	if (pairedport == null) return;
 	if (connbutton.innerHTML == 'connect') {
-		comworker.postMessage(["start"]);
+		comworker.postMessage(["start", baudselect.value]);
 		connbutton.innerHTML = 'connecting...';
 	} else {
 		comworker.postMessage(["stop"]);

@@ -480,8 +480,9 @@ uimessage = {
 				return;
 			}
 			port = ports[0];
-			port.open({baudRate: 921600}).then(() => {
-				log('connected to port');
+			baud = Number(data[1]);
+			port.open({baudRate: baud}).then(() => {
+				log(`opened port at ${baud} bps`);
 				writer = port.writable.getWriter();
 				write = write_run;
 				write();
@@ -489,7 +490,7 @@ uimessage = {
 				read = read_run;
 				read();
 				self.postMessage(["started"]);
-				self.postMessage(["sync", (10000000/write_interval).toFixed(1), 0]);
+				self.postMessage(["sync", (10000000/write_interval).toFixed(1)]);
 			}).catch((e) => {
 				log(`error connecting to port: ${e.name} ${e.message}`);
 			});
